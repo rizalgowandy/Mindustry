@@ -38,6 +38,8 @@ public class SectorInfo{
     public int storageCapacity = 0;
     /** Whether a core is available here. */
     public boolean hasCore = true;
+    /** Whether a world processor is on this map - implies that the map will get cleared. */
+    public boolean hasWorldProcessor;
     /** Whether this sector was ever fully captured. */
     public boolean wasCaptured = false;
     /** Sector that was launched from. */
@@ -82,7 +84,7 @@ public class SectorInfo{
     public transient ItemSeq lastImported = new ItemSeq();
 
     /** Special variables for simulation. */
-    public float sumHealth, sumRps, sumDps, waveHealthBase, waveHealthSlope, waveDpsBase, waveDpsSlope, bossHealth, bossDps, curEnemyHealth, curEnemyDps;
+    public float sumHealth, sumRps, sumDps, bossHealth, bossDps, curEnemyHealth, curEnemyDps;
     /** Wave where first boss shows up. */
     public int bossWave = -1;
 
@@ -130,12 +132,18 @@ public class SectorInfo{
         //enable attack mode when there's a core.
         if(state.rules.waveTeam.core() != null){
             attack = true;
-            winWave = 0;
+            if(!state.rules.sector.planet.allowWaves){
+                winWave = 0;
+            }
         }
 
         //if there are infinite waves and no win wave, add a win wave.
-        if(winWave <= 0 && !attack){
+        if(winWave <= 0 && !attack && state.rules.sector.planet.allowWaves){
             winWave = 30;
+        }
+
+        if(state.rules.sector != null && state.rules.sector.preset != null && state.rules.sector.preset.captureWave > 0 && !state.rules.sector.planet.allowWaves){
+            winWave = state.rules.sector.preset.captureWave;
         }
 
         state.wave = wave;
@@ -143,11 +151,6 @@ public class SectorInfo{
         state.rules.waveSpacing = waveSpacing;
         state.rules.winWave = winWave;
         state.rules.attackMode = attack;
-
-        //assign new wave patterns when the version changes
-        if(waveVersion != Waves.waveVersion && state.rules.sector.preset == null){
-            state.rules.spawns = Waves.generate(state.rules.sector.threat);
-        }
 
         CoreBuild entity = state.rules.defaultTeam.core();
         if(entity != null){
@@ -174,7 +177,7 @@ public class SectorInfo{
             spawnPosition = entity.pos();
         }
 
-        waveVersion = Waves.waveVersion;
+        hasWorldProcessor = state.teams.present.contains(t -> t.getBuildings(Blocks.worldProcessor).any());
         waveSpacing = state.rules.waveSpacing;
         wave = state.wave;
         winWave = state.rules.winWave;
@@ -193,10 +196,10 @@ public class SectorInfo{
             stat.mean = Math.min(stat.mean, rawProduction.get(item, ExportStat::new).mean);
         });
 
-        var pads = indexer.getAllied(state.rules.defaultTeam, BlockFlag.launchPad);
+        var pads = indexer.getFlagged(state.rules.defaultTeam, BlockFlag.launchPad);
 
         //disable export when launch pads are disabled, or there aren't any active ones
-        if(pads.size() == 0 || !Seq.with(pads).contains(t -> t.build.consValid())){
+        if(pads.size == 0 || !pads.contains(t -> t.efficiency > 0)){
             export.clear();
         }
 
@@ -204,7 +207,9 @@ public class SectorInfo{
             state.rules.sector.saveInfo();
         }
 
-        SectorDamage.writeParameters(this);
+        if(state.rules.sector != null && state.rules.sector.planet.allowWaveSimulation){
+            SectorDamage.writeParameters(this);
+        }
     }
 
     /** Update averages of various stats, updates some special sector logic.
