@@ -6,9 +6,9 @@ import arc.func.*;
 import arc.graphics.*;
 import arc.graphics.Texture.*;
 import arc.input.*;
-import arc.math.geom.*;
 import arc.scene.*;
 import arc.scene.event.*;
+import arc.scene.style.*;
 import arc.scene.ui.*;
 import arc.scene.ui.TextButton.*;
 import arc.scene.ui.layout.*;
@@ -40,7 +40,7 @@ public class SettingsMenuDialog extends BaseDialog{
     private Table prefs;
     private Table menu;
     private BaseDialog dataDialog;
-    private boolean wasPaused;
+    private Seq<SettingsCategory> categories = new Seq<>();
 
     public SettingsMenuDialog(){
         super(bundle.get("settings", "Settings"));
@@ -85,7 +85,7 @@ public class SettingsMenuDialog extends BaseDialog{
 
         dataDialog.cont.table(Tex.button, t -> {
             t.defaults().size(280f, 60f).left();
-            TextButtonStyle style = Styles.cleart;
+            TextButtonStyle style = Styles.flatt;
 
             t.button("@settings.cleardata", Icon.trash, style, () -> ui.showConfirm("@confirm", "@settings.clearall.confirm", () -> {
                 ObjectMap<String, Object> map = new ObjectMap<>();
@@ -180,6 +180,8 @@ public class SettingsMenuDialog extends BaseDialog{
             t.button("@data.import", Icon.download, style, () -> ui.showConfirm("@confirm", "@data.import.confirm", () -> platform.showFileChooser(true, "zip", file -> {
                 try{
                     importData(file);
+                    control.saves.resetSave();
+                    state = new GameState();
                     Core.app.exit();
                 }catch(IllegalArgumentException e){
                     ui.showErrorMessage("@data.invalid");
@@ -245,29 +247,57 @@ public class SettingsMenuDialog extends BaseDialog{
         return out.toString();
     }
 
+    /** Adds a custom settings category, with the icon being the specified region. */
+    public void addCategory(String name, @Nullable String region, Cons<SettingsTable> builder){
+        categories.add(new SettingsCategory(name, region == null ? null : new TextureRegionDrawable(atlas.find(region)), builder));
+    }
+
+    /** Adds a custom settings category, for use in mods. The specified consumer should add all relevant mod settings to the table. */
+    public void addCategory(String name, @Nullable Drawable icon, Cons<SettingsTable> builder){
+        categories.add(new SettingsCategory(name, icon, builder));
+    }
+
+    /** Adds a custom settings category, for use in mods. The specified consumer should add all relevant mod settings to the table. */
+    public void addCategory(String name, Cons<SettingsTable> builder){
+        addCategory(name, (Drawable)null, builder);
+    }
+
+    public Seq<SettingsCategory> getCategories(){
+        return categories;
+    }
+
     void rebuildMenu(){
         menu.clearChildren();
 
-        TextButtonStyle style = Styles.cleart;
+        TextButtonStyle style = Styles.flatt;
+
+        float marg = 8f, isize = iconMed;
 
         menu.defaults().size(300f, 60f);
-        menu.button("@settings.game", style, () -> visible(0));
-        menu.row();
-        menu.button("@settings.graphics", style, () -> visible(1));
-        menu.row();
-        menu.button("@settings.sound", style, () -> visible(2));
-        menu.row();
-        menu.button("@settings.language", style, ui.language::show);
+        menu.button("@settings.game", Icon.settings, style, isize, () -> visible(0)).marginLeft(marg).row();
+        menu.button("@settings.graphics", Icon.image, style, isize, () -> visible(1)).marginLeft(marg).row();
+        menu.button("@settings.sound", Icon.filters, style, isize, () -> visible(2)).marginLeft(marg).row();
+        menu.button("@settings.language", Icon.chat, style, isize, ui.language::show).marginLeft(marg).row();
         if(!mobile || Core.settings.getBool("keyboard")){
-            menu.row();
-            menu.button("@settings.controls", style, ui.controls::show);
+            menu.button("@settings.controls", Icon.move, style, isize, ui.controls::show).marginLeft(marg).row();
         }
 
-        menu.row();
-        menu.button("@settings.data", style, () -> dataDialog.show());
+        menu.button("@settings.data", Icon.save, style, isize, () -> dataDialog.show()).marginLeft(marg).row();
+
+        int i = 3;
+        for(var cat : categories){
+            int index = i;
+            if(cat.icon == null){
+                menu.button(cat.name, style, () -> visible(index)).marginLeft(marg).row();
+            }else{
+                menu.button(cat.name, cat.icon, style, isize, () -> visible(index)).with(b -> ((Image)b.getChildren().get(1)).setScaling(Scaling.fit)).marginLeft(marg).row();
+            }
+            i++;
+        }
     }
 
     void addSettings(){
+        sound.checkPref("alwaysmusic", false);
         sound.sliderPref("musicvol", 100, 0, 100, 1, i -> i + "%");
         sound.sliderPref("sfxvol", 100, 0, 100, 1, i -> i + "%");
         sound.sliderPref("ambientvol", 100, 0, 100, 1, i -> i + "%");
@@ -312,10 +342,12 @@ public class SettingsMenuDialog extends BaseDialog{
         if(!mobile){
             game.checkPref("backgroundpause", true);
             game.checkPref("buildautopause", false);
+            game.checkPref("distinctcontrolgroups", true);
         }
 
         game.checkPref("doubletapmine", false);
-      
+        game.checkPref("commandmodehold", true);
+
         if(!ios){
             game.checkPref("modcrashdisable", true);
         }
@@ -327,21 +359,29 @@ public class SettingsMenuDialog extends BaseDialog{
             });
 
             if(!Version.modifier.contains("beta")){
-                game.checkPref("publichost", false, i -> {
+                game.checkPref("steampublichost", false, i -> {
                     platform.updateLobby();
                 });
             }
         }
 
+        if(!mobile){
+            game.checkPref("console", false);
+        }
+
         int[] lastUiScale = {settings.getInt("uiscale", 100)};
 
-        graphics.sliderPref("uiscale", 100, 25, 300, 25, s -> {
+        graphics.sliderPref("uiscale", 100, 25, 300, 5, s -> {
             //if the user changed their UI scale, but then put it back, don't consider it 'changed'
             Core.settings.put("uiscalechanged", s != lastUiScale[0]);
             return s + "%";
         });
 
         graphics.sliderPref("screenshake", 4, 0, 8, i -> (i / 4f) + "x");
+
+        graphics.sliderPref("bloomintensity", 6, 0, 16, i -> (int)(i/4f * 100f) + "%");
+        graphics.sliderPref("bloomblur", 2, 1, 16, i -> i + "x");
+
         graphics.sliderPref("fpscap", 240, 10, 245, 5, s -> (s > 240 ? Core.bundle.get("setting.fpscap.none") : Core.bundle.format("setting.fpscap.text", s)));
         graphics.sliderPref("chatopacity", 100, 0, 100, 5, s -> s + "%");
         graphics.sliderPref("lasersopacity", 100, 0, 100, 5, s -> {
@@ -362,7 +402,7 @@ public class SettingsMenuDialog extends BaseDialog{
                 }
 
                 if(b){
-                    Core.graphics.setFullscreenMode(Core.graphics.getDisplayMode());
+                    Core.graphics.setFullscreen();
                 }else{
                     Core.graphics.setWindowedMode(Core.graphics.getWidth(), Core.graphics.getHeight());
                 }
@@ -380,7 +420,7 @@ public class SettingsMenuDialog extends BaseDialog{
             Core.graphics.setVSync(Core.settings.getBool("vsync"));
 
             if(Core.settings.getBool("fullscreen")){
-                Core.app.post(() -> Core.graphics.setFullscreenMode(Core.graphics.getDisplayMode()));
+                Core.app.post(() -> Core.graphics.setFullscreen());
             }
 
             if(Core.settings.getBool("borderlesswindow")){
@@ -402,6 +442,7 @@ public class SettingsMenuDialog extends BaseDialog{
 
         graphics.checkPref("effects", true);
         graphics.checkPref("atmosphere", !mobile);
+        graphics.checkPref("drawlight", true);
         graphics.checkPref("destroyedblocks", true);
         graphics.checkPref("blockstatus", false);
         graphics.checkPref("playerchat", true);
@@ -411,6 +452,9 @@ public class SettingsMenuDialog extends BaseDialog{
         graphics.checkPref("minimap", !mobile);
         graphics.checkPref("smoothcamera", true);
         graphics.checkPref("position", false);
+        if(!mobile){
+            graphics.checkPref("mouseposition", false);
+        }
         graphics.checkPref("fps", false);
         graphics.checkPref("playerindicators", true);
         graphics.checkPref("indicators", true);
@@ -449,6 +493,11 @@ public class SettingsMenuDialog extends BaseDialog{
         }
 
         graphics.checkPref("skipcoreanimation", false);
+        graphics.checkPref("hidedisplays", false);
+
+        if(OS.isMac){
+            graphics.checkPref("macnotch", false);
+        }
 
         if(!mobile){
             Core.settings.put("swapdiagonal", false);
@@ -460,7 +509,6 @@ public class SettingsMenuDialog extends BaseDialog{
         files.add(Core.settings.getSettingsFile());
         files.addAll(customMapDirectory.list());
         files.addAll(saveDirectory.list());
-        files.addAll(screenshotDirectory.list());
         files.addAll(modDirectory.list());
         files.addAll(schematicDirectory.list());
         String base = Core.settings.getDataDirectory().path();
@@ -481,7 +529,9 @@ public class SettingsMenuDialog extends BaseDialog{
                 path = path.startsWith("/") ? path.substring(1) : path;
                 zos.putNextEntry(new ZipEntry(path));
                 if(!add.isDirectory()){
-                    Streams.copy(add.read(), zos);
+                    try(var stream = add.read()){
+                        Streams.copy(stream, zos);
+                    }
                 }
                 zos.closeEntry();
             }
@@ -521,7 +571,14 @@ public class SettingsMenuDialog extends BaseDialog{
 
     private void visible(int index){
         prefs.clearChildren();
-        prefs.add(new Table[]{game, graphics, sound}[index]);
+
+        Seq<Table> tables = new Seq<>();
+        tables.addAll(game, graphics, sound);
+        for(var custom : categories){
+            tables.add(custom.table);
+        }
+
+        prefs.add(tables.get(index));
     }
 
     @Override
@@ -547,6 +604,22 @@ public class SettingsMenuDialog extends BaseDialog{
 
     public interface StringProcessor{
         String get(int i);
+    }
+
+    public static class SettingsCategory{
+        public String name;
+        public @Nullable Drawable icon;
+        public Cons<SettingsTable> builder;
+        public SettingsTable table;
+
+        public SettingsCategory(String name, Drawable icon, Cons<SettingsTable> builder){
+            this.name = name;
+            this.icon = icon;
+            this.builder = builder;
+
+            table = new SettingsTable();
+            builder.get(table);
+        }
     }
 
     public static class SettingsTable extends Table{
@@ -623,7 +696,7 @@ public class SettingsMenuDialog extends BaseDialog{
             button(bundle.get("settings.reset", "Reset to Defaults"), () -> {
                 for(Setting setting : list){
                     if(setting.name == null || setting.title == null) continue;
-                    settings.put(setting.name, settings.getDefault(setting.name));
+                    settings.remove(setting.name);
                 }
                 rebuild();
             }).margin(14).width(240f).pad(6);
@@ -637,28 +710,14 @@ public class SettingsMenuDialog extends BaseDialog{
             public Setting(String name){
                 this.name = name;
                 String winkey = "setting." + name + ".name.windows";
-                title = OS.isWindows && bundle.has(winkey) ? bundle.get(winkey) : bundle.get("setting." + name + ".name");
+                title = OS.isWindows && bundle.has(winkey) ? bundle.get(winkey) : bundle.get("setting." + name + ".name", name);
                 description = bundle.getOrNull("setting." + name + ".description");
             }
 
             public abstract void add(SettingsTable table);
 
             public void addDesc(Element elem){
-                if(description == null) return;
-
-                elem.addListener(new Tooltip(t -> t.background(Styles.black8).margin(4f).add(description).color(Color.lightGray)){
-                    {
-                        allowMobile = true;
-                    }
-                    @Override
-                    protected void setContainerPosition(Element element, float x, float y){
-                        this.targetActor = element;
-                        Vec2 pos = element.localToStageCoordinates(Tmp.v1.set(0, 0));
-                        container.pack();
-                        container.setPosition(pos.x, pos.y, Align.topLeft);
-                        container.setOrigin(0, element.getHeight());
-                    }
-                });
+                ui.addDescTooltip(elem, description);
             }
         }
 
@@ -728,7 +787,7 @@ public class SettingsMenuDialog extends BaseDialog{
                 table.row();
             }
         }
-        
+
         public static class TextSetting extends Setting{
             String def;
             Cons<String> changed;
